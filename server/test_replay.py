@@ -29,6 +29,9 @@ def main():
     unfinished = log[: turn_lines[min(turn_lines)] + 1]
     refused = analyzer.analyze({"log": unfinished, "side": "p1"})
     assert not refused["ok"] and "rated" in refused["error"], refused
+    # ...even if the request claims to be a replay
+    refused = analyzer.analyze({"log": unfinished, "side": "p1", "upTo": len(unfinished)})
+    assert not refused["ok"] and "rated" in refused["error"], refused
     print("live rated battle refused: OK")
 
     failures = 0

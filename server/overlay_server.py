@@ -101,10 +101,9 @@ class Analyzer:
     def analyze(self, payload: dict) -> dict:
         log = payload["log"]
         side = payload["side"]
-        is_replay = payload.get("upTo") is not None
         rated = any(line.startswith("|rated") for line in log)
         ended = any(line.startswith("|win|") or line == "|tie" or line.startswith("|tie|") for line in log)
-        if rated and not ended and not is_replay:
+        if rated and not ended:
             # The one thing this tool won't do: help during an ongoing ladder game
             return {"ok": False, "error": "Live rated battle: analysis is off until it ends."}
 
