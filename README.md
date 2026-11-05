@@ -1,5 +1,7 @@
 # Foul Play Overlay
 
+*Coded by Claude Opus 5.5, with direction by Justis Mills.*
+
 "What would Foul Play do?" A toggleable panel on Pokémon Showdown that shows
 [Foul Play](https://github.com/pmariglia/foul-play)'s ranking of your options,
 turn by turn. Gen 9 Random Battles only.
