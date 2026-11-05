@@ -1,0 +1,42 @@
+#fpo-root { position: fixed; right: 14px; bottom: 14px; z-index: 2147483000; font: 12px/1.35 -apple-system, 'Segoe UI', Roboto, sans-serif; color: #e6e6ee; }
+#fpo-root button { font: inherit; cursor: pointer; }
+#fpo-toggle { position: absolute; right: 0; bottom: 0; width: 34px; height: 34px; border-radius: 50%; border: 1px solid #4a4a63; background: #1c1c28; color: #9a9ab0; font-weight: 700; }
+#fpo-toggle.on { background: #3b2f6b; color: #fff; border-color: #7b68ee; }
+#fpo-panel { position: absolute; right: 0; bottom: 44px; width: 310px; max-height: 70vh; overflow-y: auto; background: rgba(20, 20, 30, 0.97); border: 1px solid #3a3a52; border-radius: 10px; padding: 10px; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); }
+#fpo-panel[hidden], #fpo-settings[hidden], #fpo-scanbar[hidden] { display: none; }
+#fpo-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+#fpo-title { font-weight: 700; color: #b8a9ff; }
+#fpo-persp { display: flex; gap: 4px; flex: 1; justify-content: flex-end; color: #9a9ab0; overflow: hidden; }
+.fpo-side { background: #26263a; border: 1px solid #3a3a52; color: #bbb; border-radius: 6px; padding: 1px 6px; max-width: 105px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fpo-side.on { background: #3b2f6b; color: #fff; border-color: #7b68ee; }
+#fpo-gear { background: none; border: none; color: #9a9ab0; font-size: 14px; }
+#fpo-settings { display: grid; gap: 4px; margin-bottom: 8px; padding: 6px; background: #1a1a26; border-radius: 6px; color: #aaa; }
+#fpo-settings input { width: 58px; background: #11111a; color: #eee; border: 1px solid #3a3a52; border-radius: 4px; padding: 1px 4px; }
+.fpo-status { color: #a0a0b8; padding: 6px 2px; }
+.fpo-sub { color: #9a9ab0; margin-bottom: 6px; }
+.fpo-opt { position: relative; display: flex; align-items: center; gap: 6px; padding: 4px 6px; margin-bottom: 3px; border-radius: 5px; background: #1e1e2c; overflow: hidden; }
+.fpo-opt.played { outline: 1px solid #e0b84a; }
+.fpo-bar { position: absolute; left: 0; top: 0; bottom: 0; background: rgba(123, 104, 238, 0.28); }
+.fpo-label { position: relative; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fpo-num { position: relative; font-variant-numeric: tabular-nums; font-weight: 600; }
+.fpo-eval { position: relative; width: 34px; text-align: right; color: #8f8fa8; font-variant-numeric: tabular-nums; }
+.fpo-played { margin-top: 6px; }
+.fpo-tag { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 11px; margin-left: 2px; }
+.fpo-tag.good { background: #1f4d2e; color: #9be5b0; }
+.fpo-tag.ok { background: #2c3550; color: #aec2ff; }
+.fpo-tag.warn { background: #5a4513; color: #ffd27a; }
+.fpo-tag.bad { background: #5c1f25; color: #ff9aa5; }
+.fpo-meta, .fpo-note { color: #77778f; font-size: 11px; margin-top: 6px; }
+#fpo-scanbar { margin-top: 8px; }
+#fpo-scan, #fpo-scan-cancel { width: 100%; background: #26263a; border: 1px solid #4a4a63; color: #ddd; border-radius: 6px; padding: 4px; }
+#fpo-scan-cancel { width: auto; padding: 0 6px; margin-left: 6px; }
+#fpo-scan-out { margin-top: 8px; }
+.fpo-scanrow { display: grid; grid-template-columns: 30px 70px 1fr auto; gap: 4px; align-items: center; padding: 3px 4px; border-radius: 5px; cursor: pointer; }
+.fpo-scanrow:hover { background: #26263a; }
+.fpo-t { color: #9a9ab0; }
+.fpo-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c9c9da; }
+.fpo-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#fpo-foot { margin-top: 8px; text-align: right; }
+.fpo-link { background: none; border: none; color: #b8a9ff; padding: 0; }
+.fpo-link:hover { text-decoration: underline; }
+.fpo-skipped { color: #9a9ab0; }

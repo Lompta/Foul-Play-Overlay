@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Foul Play Overlay",
+  "version": "0.2.0",
+  "description": "What would Foul Play do? Move analysis for Showdown replays and unrated battles, plus a turn-by-turn review of your own finished games, from a local Foul Play server.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAov7TmLNhHQ8+a853jjncYKaO2Bmrca0NDsmz2xRLN1gIkLix/02sQ70d9laSYpUON0r5ZuncjVXJyNojd35aTuik0/49P73t6KKzGi+HmVfYfWhxvPC6ixpmQmPSC0oAO07ZjIme8i8f6r48DAygHOffXTOCgUQjLNM4Ypznu1VMYDtahxge5B2cIJoPSaROtJ+XKKCo2FUh4dX5WM0dPWHuax3I/xAbdwKurnfuHUDcd+xEs9c6tDEgs5QtXfxos9QKzu//EGuTAHbhZUXehJbk3okr6iktq3pCYPaVi/hfVRMUBoXAE08XrCCqqCkU63x/ByfkSMm949baPA8auQIDAQAB",
+  "permissions": ["storage", "nativeMessaging"],
+  "host_permissions": ["http://127.0.0.1:8770/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "Review my games (Foul Play)" },
+  "content_scripts": [
+    {
+      "matches": ["https://play.pokemonshowdown.com/*", "https://replay.pokemonshowdown.com/*"],
+      "js": ["page.js"],
+      "world": "MAIN",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://play.pokemonshowdown.com/*", "https://replay.pokemonshowdown.com/*"],
+      "js": ["content.js"],
+      "css": ["overlay.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
