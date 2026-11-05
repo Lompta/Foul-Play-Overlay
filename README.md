@@ -107,7 +107,8 @@ turn by turn.
 
 Tests: `server\test_tape.py <abs path to replay.json> [p1|p2]` (simulated recording, end to end), `server\test_replay.py <abs path to replay.json> all`, `server\test_live.py`, and
 `server\test_native_host.py` (start/stop lifecycle; run with no server running).
-Replays for testing can be downloaded from `https://replay.pokemonshowdown.com/<id>.json`.
+This repo doesn't include any replays (`server/test_data/` is gitignored), so you'll need to get your own for
+`test_replay.py` and `test_tape.py`. Download them from `https://replay.pokemonshowdown.com/<id>.json`.
 
 ## Known limits
 
