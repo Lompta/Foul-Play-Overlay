@@ -17,6 +17,17 @@
   // While this page is open, keep the local server running
   try { chrome.runtime.connect({ name: 'fpo-active' }); } catch (e) { /* ignore */ }
 
+  // Notes on the battle being shown. The card is built once and kept across
+  // re-renders, so typing isn't interrupted when analysis progress comes in.
+  const notesCard = document.createElement('section');
+  notesCard.className = 'card notes';
+  notesCard.innerHTML = `<div class="notes-head"><h3>Notes</h3><span id="notes-status" class="muted"></span></div>
+    <textarea id="notes" rows="4" placeholder="Your takeaways from this game. Saved as you type."></textarea>`;
+  const notesBox = notesCard.querySelector('#notes');
+  const notesStatus = notesCard.querySelector('#notes-status');
+  let notesFor = null; // battle id the text box holds
+  let notesTimer = null;
+
   async function api(path, opts = {}) {
     const r = await fetch(SERVER + path, { ...opts, headers: { 'X-FPO': '1', 'Content-Type': 'application/json' } });
     return r.json();
@@ -28,15 +39,25 @@
 
   // ------------------------------------------------------------ verdicts
 
+  // Verdicts go by win estimate, not search share: within ABOUT_AS_GOOD of
+  // Foul Play's top choice is as good as agreeing (repeat searches differ by
+  // about that much, and close options are often near-ties).
+  const ABOUT_AS_GOOD = 0.03;
+  const MISTAKE = 0.1;
+  const agrees = (p) => !!p && !p.skipped && p.rank != null && (p.rank === 1 || (p.evalLoss != null && p.evalLoss < ABOUT_AS_GOOD));
+
   function verdict(p) {
     if (!p) return { cls: 'none', text: 'no choice seen' };
     if (p.skipped) return { cls: 'none', text: "didn't act" };
     if (p.rank == null) return { cls: 'bad', text: 'not considered' };
     if (p.rank === 1) return { cls: 'good', text: 'top choice' };
-    if (p.evalLoss != null && p.evalLoss >= 0.1) return { cls: 'bad', text: 'likely mistake' };
-    if (p.surprise >= 0.3) return { cls: 'warn', text: 'surprising' };
-    return { cls: 'ok', text: 'reasonable' };
+    if (p.evalLoss == null) return { cls: 'ok', text: 'reasonable' };
+    if (p.evalLoss < ABOUT_AS_GOOD) return { cls: 'good', text: 'about as good' };
+    if (p.evalLoss >= MISTAKE) return { cls: 'bad', text: 'likely mistake' };
+    return { cls: 'ok', text: 'slightly worse' };
   }
+  // How an option's win estimate compares with Foul Play's top choice
+  const qualityClass = (ev, top) => (ev == null || top == null ? '' : top - ev >= MISTAKE ? 'q-bad' : top - ev >= ABOUT_AS_GOOD ? 'q-meh' : '');
   const tag = (v) => `<span class="tag ${v.cls}">${esc(v.text)}</span>`;
   const isMistake = (d) => d.played && d.played.rank != null && (d.played.evalLoss || 0) >= 0.1;
 
@@ -64,10 +85,11 @@
     $('list').innerHTML = battles.map((b) => {
       const res = b.result || 'unknown';
       const resText = { win: 'Won', loss: 'Lost', tie: 'Tie', unknown: b.abandoned ? 'Unfinished' : '?' }[res];
+      const noted = b.hasNotes ? '<span class="noted" title="Has notes">✎ notes</span>' : '';
       const rating = b.rating ? `${b.rating.after} (${b.rating.after >= b.rating.before ? '+' : ''}${b.rating.after - b.rating.before})` : (b.rated ? 'rated' : 'unrated');
       return `<button class="item ${b.id === sel ? 'on' : ''}" data-id="${esc(b.id)}">
         <div class="row1"><span class="vs">vs ${esc(b.opponent)}</span><span class="res ${res}">${resText}</span></div>
-        <div class="row2"><span>${when(b.endedAt)}</span><span>${esc(rating)}</span><span>${b.turns || 0} turns</span></div>
+        <div class="row2"><span>${when(b.endedAt)}</span><span>${esc(rating)}</span><span>${b.turns || 0} turns</span>${noted}</div>
         <div class="row2"><span>${esc(statusText(b))}</span></div>
       </button>`;
     }).join('');
@@ -80,7 +102,7 @@
     if (!b) return;
     const ds = b.decisions || [];
     const judged = ds.filter((d) => d.played && d.played.rank != null);
-    const agree = judged.length ? judged.filter((d) => d.played.rank === 1).length / judged.length : null;
+    const agree = judged.length ? judged.filter((d) => agrees(d.played)).length / judged.length : null;
     const mistakes = ds.filter(isMistake).length;
     const unknown = ds.filter((d) => !d.known).length;
     const resText = { win: 'Won', loss: 'Lost', tie: 'Tie' }[b.result] || (b.abandoned ? 'Unfinished' : '');
@@ -90,7 +112,7 @@
       : b.status === 'queued' ? '<div class="card"><div class="sub">Waiting in the analysis queue…</div></div>'
       : b.status === 'error' ? `<div class="card"><div class="sub">Analysis failed: ${esc(b.error)}</div></div>` : '';
 
-    $('detail').innerHTML = `
+    const top = `
       <div class="head">
         <h2>${esc(b.me)} vs ${esc(b.opponent)}</h2>
         <span class="muted">${esc(resText)}${esc(rating)} · ${b.turns} turns · ${when(b.endedAt)}</span>
@@ -98,11 +120,12 @@
       </div>
       ${progress}
       <div class="tiles">
-        <div class="tile"><div class="k">Agreed with Foul Play</div><div class="v">${pct(agree)}</div></div>
+        <div class="tile"><div class="k" title="Its top choice, or within 3 points of it">Agreed with Foul Play</div><div class="v">${pct(agree)}</div></div>
         <div class="tile"><div class="k">Likely mistakes</div><div class="v">${mistakes}</div></div>
         <div class="tile"><div class="k">Decisions</div><div class="v">${ds.length}</div></div>
         <div class="tile"><div class="k">Start → end estimate</div><div class="v">${pct(ds[0] && ds[0].value)} → ${pct(ds.length ? ds[ds.length - 1].value : null)}</div></div>
-      </div>
+      </div>`;
+    const rest = `
       <div class="card">
         <h3>Foul Play's win estimate</h3>
         <div class="sub">Its search score before each of your decisions, from your side. A rough guide, not a calibrated probability.</div>
@@ -111,11 +134,17 @@
       </div>
       <div class="card">
         <h3>Every decision</h3>
-        <div class="filters"><label><input type="checkbox" id="onlydis" ${onlyDisagreements ? 'checked' : ''}> Only where you disagreed with Foul Play</label></div>
+        <div class="filters"><label><input type="checkbox" id="onlydis" ${onlyDisagreements ? 'checked' : ''}> Only where you were worse than Foul Play's top choice</label></div>
         <div id="decs"></div>
         ${unknown ? `<div class="note">${unknown} decision${unknown === 1 ? '' : 's'} had no recorded options (e.g. the page was reloaded); those were reconstructed from the log.</div>` : ''}
         ${b.settings ? `<div class="note">Search: ${b.settings.searchMs} ms × ${b.settings.worlds} sampled opponent sets per decision.</div>` : ''}
       </div>`;
+    if (!$('d-top')) {
+      $('detail').innerHTML = '<div id="d-top"></div><div id="d-notes"></div><div id="d-rest"></div>';
+      $('d-notes').appendChild(notesCard);
+    }
+    $('d-top').innerHTML = top;
+    $('d-rest').innerHTML = rest;
     $('reanalyze').onclick = async () => { await api(`/battles/${b.id}/reanalyze`, { method: 'POST' }); refresh(); };
     $('onlydis').onchange = (e) => { onlyDisagreements = e.target.checked; renderDecisions(); };
     renderChart();
@@ -128,7 +157,7 @@
 
   function renderDecisions() {
     const ds = current.decisions || [];
-    const rows = ds.map((d, i) => ({ d, i })).filter(({ d }) => !onlyDisagreements || (d.played && !d.played.skipped && d.played.rank !== 1));
+    const rows = ds.map((d, i) => ({ d, i })).filter(({ d }) => !onlyDisagreements || (d.played && !d.played.skipped && !agrees(d.played)));
     if (!rows.length) { $('decs').innerHTML = `<div class="muted">${ds.length ? 'You agreed with Foul Play on every decision.' : 'Nothing analyzed yet.'}</div>`; return; }
     $('decs').innerHTML = rows.map(({ d, i }) => {
       const v = verdict(d.played);
@@ -136,7 +165,7 @@
       const played = d.played
         ? d.played.skipped ? esc(d.played.label) : `You: <b>${esc(d.played.label)}</b>${d.played.rank ? ` <span class="muted">#${d.played.rank}</span>` : ''}`
         : '<span class="muted">No choice found in the log</span>';
-      const fp = best && !(d.played && d.played.rank === 1) && !(d.played && d.played.skipped) ? ` · FP: <i>${esc(best.label)}</i>` : '';
+      const fp = best && !agrees(d.played) && !(d.played && d.played.skipped) ? ` · FP: <i>${esc(best.label)}</i>` : '';
       return `<div class="dec" id="dec-${i}">
         <button data-i="${i}" aria-expanded="${open.has(i)}">
           <span class="when"><b>T${d.turn}</b>${decisionTitle(d)}</span>
@@ -237,20 +266,52 @@
     </div>`;
   }
 
+  // ------------------------------------------------------------ Showdex
+
+  const toID = (s) => String(s || '').normalize('NFD').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+  // What Showdex showed for this option while you were deciding, if anything.
+  // Its numbers are for Tera only when its Tera toggle was on, so they label
+  // either the Tera options or the plain ones, never both.
+  function showdexFor(d, o) {
+    const sd = d.showdex;
+    if (!sd || !sd.moves || o.choice.startsWith('switch ')) return null;
+    if (/-tera$/.test(o.choice) !== !!sd.tera) return null;
+    const id = toID(o.choice.replace(/-tera$/, ''));
+    const m = sd.moves.find((x) => toID(x.move) === id);
+    if (!m) return null;
+    const text = m.ko || (/%/.test(m.damage) ? m.damage : m.damage === 'IMMUNE' ? 'immune' : '');
+    if (!text) return null;
+    const vs = sd.vs ? ` vs ${sd.vs}` : '';
+    return `<span class="ko" title="${esc(`Showdex: ${m.damage || '–'}${m.ko ? ' · ' + m.ko : ''}${vs}`)}">(${esc(text)})</span>`;
+  }
+
+  function showdexNote(d) {
+    const sd = d.showdex;
+    if (!sd) return '';
+    const off = sd.vs && d.opponent && toID(sd.vs) !== toID(d.opponent)
+      ? ` Showdex was calculating against ${esc(sd.vs)}, not the active ${esc(d.opponent)}.` : '';
+    return `<div class="note">In brackets: what Showdex showed while you decided${sd.tera ? ', with Tera' : ''}${sd.vs && !off ? `, vs ${esc(sd.vs)}` : ''}.${off}</div>`;
+  }
+
   function decisionBody(d) {
     if (d.error) return `<div class="body"><div class="note">Couldn't analyze this one: ${esc(d.error)}</div></div>`;
     const pc = d.played && d.played.choice;
+    const top = d.options && d.options[0] && d.options[0].eval;
     const opts = (d.options || []).slice(0, 8).map((o) => {
       const isPlayed = pc && (o.choice === pc || o.choice === pc.replace(/-tera$/, ''));
-      return `<div class="opt ${isPlayed ? 'played' : ''}"><span class="bar" style="width:${Math.max(1, o.share * 100)}%"></span>
-        <span class="lab">${esc(o.label)}</span><span class="num">${pct(o.share)}</span>
-        <span class="ev" title="Average search score for this option">${o.eval == null ? '' : o.eval.toFixed(2)}</span></div>`;
+      const ko = showdexFor(d, o);
+      return `<div class="opt ${isPlayed ? 'played' : ''} ${qualityClass(o.eval, top)}"><span class="bar" style="width:${o.eval == null ? 0 : Math.max(1, o.eval * 100)}%"></span>
+        <span class="lab">${esc(o.label)}${ko ? ' ' + ko : ''}</span>
+        <span class="num" title="Foul Play's win estimate if you pick this">${pct(o.eval)}</span>
+        <span class="sh" title="Share of Foul Play's search spent on this option">${pct(o.share)} of search</span></div>`;
     }).join('');
     const happened = (d.happened || []).map((h) => `<li>${esc(h)}</li>`).join('');
     const pos = d.state ? positionView(d.state) : '<div class="pos note">Position not available yet; it gets filled in shortly after the server starts.</div>';
     return `<div class="body">
       ${pos}
-      <div><h4>Foul Play's options</h4>${opts}<div class="note">Bar: share of the search spent on it. Right: average score (higher is better). Outlined: what you did.</div>
+      <div><h4>Foul Play's options</h4>${opts}<div class="note">Bar and number: Foul Play's win estimate for each option; red ones are well below its top choice. Small: how much of its search went to it. Outlined: what you did.</div>
+      ${showdexNote(d)}
       ${d.warning ? `<div class="note">Note: ${esc(d.warning)}.</div>` : ''}</div>
       <div><h4>What happened</h4>${happened ? `<ul class="happened">${happened}</ul>` : '<div class="muted">–</div>'}</div>
     </div>`;
@@ -298,7 +359,7 @@
       const v = verdict(d.played);
       tip.innerHTML = `<div><b>Turn ${d.turn}</b> · ${decisionTitle(d)} · <b>${pct(d.value)}</b></div>
         <div>${d.played ? esc(d.played.label) : '–'} ${tag(v)}</div>
-        ${d.options && d.options[0] && !(d.played && (d.played.rank === 1 || d.played.skipped)) ? `<div class="muted">FP: ${esc(d.options[0].label)}</div>` : ''}`;
+        ${d.options && d.options[0] && !(d.played && (agrees(d.played) || d.played.skipped)) ? `<div class="muted">FP: ${esc(d.options[0].label)}</div>` : ''}`;
       tip.hidden = false;
       const tx = Math.min(evt.clientX + 14, window.innerWidth - tip.offsetWidth - 8);
       tip.style.left = tx + 'px';
@@ -329,6 +390,11 @@
     }
     const prev = current && current.id === res.battle.id ? current : null;
     if (!prev) open = new Set();
+    if (notesFor !== res.battle.id) {
+      notesFor = res.battle.id;
+      notesBox.value = res.battle.notes || '';
+      notesStatus.textContent = '';
+    }
     // keep scroll position stable when only progress changed
     const states = (b) => (b.decisions || []).filter((d) => d.state).length;
     const changed = !prev || prev.status !== res.battle.status || (prev.decisions || []).length !== (res.battle.decisions || []).length || states(prev) !== states(res.battle);
@@ -360,6 +426,29 @@
     refresh();
   }
 
+  async function saveNotes(keepalive) {
+    clearTimeout(notesTimer);
+    notesTimer = null;
+    const id = notesFor, text = notesBox.value;
+    if (!id) return;
+    notesStatus.textContent = 'Saving…';
+    try {
+      const res = await api(`/battles/${encodeURIComponent(id)}/notes`, { method: 'POST', body: JSON.stringify({ notes: text }), keepalive });
+      if (notesFor === id) notesStatus.textContent = res.ok ? 'Saved' : `Couldn't save: ${res.error || 'unknown error'}`;
+      const b = battles.find((x) => x.id === id);
+      if (res.ok && b && b.hasNotes !== !!text.trim()) { b.hasNotes = !!text.trim(); renderList(); }
+    } catch (e) {
+      if (notesFor === id) notesStatus.textContent = "Couldn't save: the local server isn't reachable. Your text is still here.";
+    }
+  }
+  notesBox.addEventListener('input', () => {
+    notesStatus.textContent = 'Editing…';
+    clearTimeout(notesTimer);
+    notesTimer = setTimeout(saveNotes, 700);
+  });
+  notesBox.addEventListener('blur', () => { if (notesTimer) saveNotes(); });
+  window.addEventListener('beforeunload', () => { if (notesTimer) saveNotes(true); });
+
   $('list').addEventListener('click', (e) => {
     const b = e.target.closest('.item');
     if (b) location.hash = b.dataset.id;
@@ -371,7 +460,12 @@
     if (open.has(i)) open.delete(i); else open.add(i);
     renderDecisions();
   });
-  window.addEventListener('hashchange', () => { current = null; renderList(); loadSelected(); });
+  window.addEventListener('hashchange', () => {
+    if (notesTimer) saveNotes(); // still for the battle being left
+    current = null;
+    renderList();
+    loadSelected();
+  });
   let rt;
   window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => current && renderChart(), 100); });
 

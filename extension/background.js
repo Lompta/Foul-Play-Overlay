@@ -15,6 +15,8 @@ let waiters = [];
 let stopTimer = null;
 const clients = new Set();
 let tapeBusy = false; // the server is analyzing recorded battles; keep it running
+const playing = new Map(); // battle id -> last time we heard from it, while it's in progress
+const PLAYING_KEEP_MS = 10 * 60 * 1000;
 
 function settle(ok) {
   const w = waiters;
@@ -47,9 +49,16 @@ function ensureServer() {
   });
 }
 
+function stillPlaying() {
+  for (const [id, t] of playing) if (Date.now() - t > PLAYING_KEEP_MS) playing.delete(id);
+  return playing.size > 0;
+}
+
 function stopSoonIfUnused() {
   clearTimeout(stopTimer);
   if (clients.size || tapeBusy) return;
+  // A battle you're playing is being analyzed as it goes; check again later
+  if (stillPlaying()) { stopTimer = setTimeout(stopSoonIfUnused, 60000); return; }
   stopTimer = setTimeout(() => {
     if (!clients.size && !tapeBusy && nativePort) {
       nativePort.disconnect();
@@ -69,7 +78,13 @@ async function serverResponds() {
 }
 
 async function whenReady() {
-  if (ready || (await serverResponds())) return true; // also covers a server started by hand
+  if (await serverResponds()) return true; // also covers a server started by hand
+  if (ready && nativePort) {
+    // We started it, but it's stopped answering: start over
+    try { nativePort.disconnect(); } catch (e) { /* already gone */ }
+    nativePort = null;
+    ready = false;
+  }
   ensureServer();
   if (ready) return true;
   return new Promise((resolve) => {
@@ -164,6 +179,10 @@ async function onRecording(msg) {
         r.requests.push({ request: msg.request, logLen: msg.logLen });
       }
       if (msg.log && msg.log.length >= r.log.length) r.log = msg.log;
+    } else if (msg.kind === 'calc') {
+      // What Showdex showed for this decision (damage and KO chances); newest wins
+      r.showdex = r.showdex || {};
+      r.showdex[msg.rqid] = msg.calc;
     } else if (msg.kind === 'final') {
       if (!got[key]) return null; // a battle we never recorded (e.g. before installing this)
       r.log = msg.log;
@@ -172,8 +191,27 @@ async function onRecording(msg) {
     await chrome.storage.local.set({ [key]: r });
     return r;
   });
-  if (rec && rec.final) await submit(rec);
-  else flushStale();
+  if (rec && rec.final) { playing.delete(rec.id); await submit(rec); }
+  else {
+    if (rec && msg.kind === 'request') sendLive(rec);
+    flushStale();
+  }
+}
+
+// The recording so far, so the server can analyze decisions you've already
+// made while the battle goes on. It never sends anything back about the
+// battle; the review shows it only after the final recording arrives.
+async function sendLive(rec) {
+  playing.set(rec.id, Date.now());
+  if (!(await whenReady())) return;
+  try {
+    await fetch(SERVER + '/record/live', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-FPO': '1' },
+      body: JSON.stringify({ id: rec.id, side: rec.side, players: rec.players, log: rec.log, requests: rec.requests }),
+    });
+  } catch (e) { /* it'll all be analyzed at the end anyway */ }
+  stopSoonIfUnused();
 }
 
 const submitting = new Set();
@@ -190,7 +228,7 @@ async function submitOnce(rec) {
     const r = await fetch(SERVER + '/record', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-FPO': '1' },
-      body: JSON.stringify({ id: rec.id, side: rec.side, players: rec.players, log: rec.log, requests: rec.requests, lastUpdate: rec.lastUpdate }),
+      body: JSON.stringify({ id: rec.id, side: rec.side, players: rec.players, log: rec.log, requests: rec.requests, showdex: rec.showdex || {}, lastUpdate: rec.lastUpdate }),
     });
     res = await r.json();
   } catch (e) {

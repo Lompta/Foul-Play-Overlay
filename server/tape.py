@@ -9,9 +9,18 @@ with its place in the battle log and run Foul Play on every decision you made:
 each turn's move, plus each replacement you had to choose after a faint or a
 pivot move.
 
-Recordings live in data/battles/<room id>.json.
+To have the review ready the moment a battle ends, the extension also sends
+the recording so far while you play (/record/live). Each decision is searched
+once it's behind you (the log has moved on to the next one), never while you're
+still choosing. Those results stay in this process's memory: nothing is written
+to disk or served by any endpoint until the finished battle arrives through
+/record, which then reuses them instead of searching again.
+
+Recordings live in data/battles/<room id>.json, and your notes on each one in
+data/battles/notes/<room id>.txt (kept apart so re-analysis never touches them).
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -31,6 +40,7 @@ logger = logging.getLogger("fpo")
 
 FORMAT_TIER = "[Gen 9] Random Battle"
 ABANDONED_AFTER_S = 30 * 60
+LIVE_FORGET_AFTER_S = 3 * 60 * 60  # in-progress searches nobody came back for
 SAFE_ID = re.compile(r"^[a-z0-9-]{1,100}$")
 
 
@@ -196,7 +206,9 @@ class Tape:
     def __init__(self, analyzer, data_dir: str, search_ms: int, worlds: int):
         self.analyzer = analyzer
         self.dir = data_dir
-        os.makedirs(self.dir, exist_ok=True)
+        self.notes_dir = os.path.join(data_dir, "notes")
+        os.makedirs(self.notes_dir, exist_ok=True)
+        self.noted = {n[:-4] for n in os.listdir(self.notes_dir) if n.endswith(".txt")}
         self.search_ms = search_ms
         self.worlds = worlds
         self.lock = threading.Lock()
@@ -221,7 +233,12 @@ class Tape:
             elif meta["status"] == "done" and meta.get("needsStates"):
                 self.queue.append(meta["id"])
                 self.states_only.add(meta["id"])
+        # Battles in progress: {id: {"log", "side", "requests", "seen", "cache"}}.
+        # Memory only; see the module docstring.
+        self.lives = {}
+        self.live_wake = threading.Event()
         threading.Thread(target=self._worker, daemon=True).start()
+        threading.Thread(target=self._live_worker, daemon=True).start()
         if self.queue:
             self.wake.set()
 
@@ -273,16 +290,50 @@ class Tape:
             "error": rec.get("error"),
             "progress": rec.get("progress"),
             "abandoned": rec.get("abandoned", False),
-            "agreement": round(sum(d["played"]["rank"] == 1 for d in judged) / len(judged), 3) if judged else None,
+            # Its top choice, or within 3 points of it (same rule as the review page)
+            "agreement": round(
+                sum(d["played"]["rank"] == 1 or (d["played"].get("evalLoss") is not None and d["played"]["evalLoss"] < 0.03) for d in judged) / len(judged), 3
+            ) if judged else None,
             "mistakes": sum(1 for d in judged if (d["played"].get("evalLoss") or 0) >= 0.1),
             "needsStates": any("state" not in d and not d.get("error") for d in ds),
         }
 
     def list(self) -> list[dict]:
         with self.io:
-            out = list(self.metas.values())
+            out = [{**m, "hasNotes": m["id"] in self.noted} for m in self.metas.values()]
         out.sort(key=lambda m: m.get("endedAt") or 0, reverse=True)
         return out
+
+    # ------------------------------------------------------------ notes
+
+    def _notes_path(self, battle_id: str) -> str:
+        return os.path.join(self.notes_dir, battle_id + ".txt")
+
+    def notes(self, battle_id: str) -> str:
+        if not SAFE_ID.match(battle_id):
+            return ""
+        try:
+            with open(self._notes_path(battle_id), encoding="utf-8") as f:
+                return f.read()
+        except OSError:
+            return ""
+
+    def set_notes(self, battle_id: str, text) -> bool:
+        if not SAFE_ID.match(battle_id) or battle_id not in self.metas or not isinstance(text, str):
+            return False
+        path = self._notes_path(battle_id)
+        with self.io:
+            if not text.strip():
+                if os.path.exists(path):
+                    os.remove(path)
+                self.noted.discard(battle_id)
+                return True
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(text)
+            os.replace(tmp, path)
+            self.noted.add(battle_id)
+        return True
 
     def status(self) -> dict:
         with self.lock:
@@ -343,6 +394,8 @@ class Tape:
             "endedAt": int(time.time() * 1000) if ended else int(last * 1000),
             "log": log,
             "requests": payload.get("requests") or [],
+            # Showdex's damage/KO readings, by request id (see page.js)
+            "showdex": payload.get("showdex") if isinstance(payload.get("showdex"), dict) else {},
             "status": "queued",
             "progress": None,
             "decisions": [],
@@ -350,6 +403,62 @@ class Tape:
         self._save(rec)
         self.enqueue(battle_id)
         return {"ok": True, "id": battle_id}
+
+    def live(self, payload: dict) -> dict:
+        """The recording so far, while the battle is still going. Returns nothing about it."""
+        battle_id = str(payload.get("id", "")).removeprefix("battle-")
+        log = payload.get("log") or []
+        side = payload.get("side")
+        requests = payload.get("requests") or []
+        if not SAFE_ID.match(battle_id) or side not in ("p1", "p2") or not isinstance(log, list) or not isinstance(requests, list):
+            return {"ok": False, "error": "bad recording"}
+        if not any(line == "|tier|" + FORMAT_TIER for line in log):
+            return {"ok": False, "error": "only Gen 9 Random Battles are supported"}
+        with self.lock:
+            entry = self.lives.setdefault(battle_id, {"cache": {}})
+            entry.update(log=log, side=side, requests=requests, seen=time.time())
+        self.live_wake.set()
+        return {"ok": True}
+
+    def _search_key(self, log, point: dict, request: dict) -> str:
+        # Same position, same request, same settings: same search
+        prefix = hashlib.sha1("\n".join(log[: point["cut"]]).encode()).hexdigest()
+        return f'{point["kind"]}:{point["cut"]}:{request.get("rqid")}:{self.search_ms}:{self.worlds}:{prefix}'
+
+    def _next_live_job(self):
+        now = time.time()
+        with self.lock:
+            for battle_id in [b for b, e in self.lives.items() if now - e["seen"] > LIVE_FORGET_AFTER_S]:
+                del self.lives[battle_id]
+            lives = [(b, e) for b, e in self.lives.items() if b != self.current]
+        for battle_id, e in lives:
+            log, side = e["log"], e["side"]
+            pairs = align(decision_points(log, side), usable_requests(e["requests"]))
+            # The last decision may still be open: only search ones the battle has moved past.
+            # Decisions without a recorded request wait for the end (they use hindsight).
+            for point, request in pairs[:-1]:
+                if request is None:
+                    continue
+                key = self._search_key(log, point, request)
+                if key not in e["cache"]:
+                    return e, key, log[: point["cut"]], side, request
+        return None
+
+    def _live_worker(self):
+        from battle_builder import build_battle
+
+        while True:
+            self.live_wake.wait()
+            self.live_wake.clear()
+            while (job := self._next_live_job()) is not None:
+                entry, key, position, side, request = job
+                try:
+                    battle = build_battle(position, side, request, self.analyzer.mode).battle
+                    ok = battle.user.active is not None and battle.opponent.active is not None
+                    entry["cache"][key] = self.analyzer.search(battle, self.search_ms, self.worlds) if ok else None
+                except Exception:
+                    logger.exception("live search failed; it will be done after the battle")
+                    entry["cache"][key] = None
 
     def reanalyze(self, battle_id: str) -> bool:
         rec = self.load(battle_id)
@@ -445,6 +554,10 @@ class Tape:
         pairs = align(points, usable_requests(rec["requests"]))
         opp_name = rec.get("opponent") or "Opponent"
         names = display_names(log, [e.get("request") for e in rec["requests"] if isinstance(e, dict)])
+        # Searches already done while the battle was going on
+        with self.lock:
+            live = self.lives.get(battle_id)
+        cache = dict(live["cache"]) if live else {}
         # Pick up where we left off if the server stopped partway through
         start = (rec.get("progress") or {}).get("done", 0) if rec.get("status") == "analyzing" else 0
         if not start:
@@ -476,7 +589,9 @@ class Tape:
                     want = request_active(request)
                     if want and normalize_name(battle.user.active.name) != want and not battle.force_switch:
                         decision["warning"] = "recorded options didn't match the log here"
-                res = self.analyzer.search(battle, self.search_ms, self.worlds)
+                res = cache.get(self._search_key(log, point, request)) if request is not None else None
+                if res is None:
+                    res = self.analyzer.search(battle, self.search_ms, self.worlds)
                 decision.update(
                     state=state,
                     user=battle.user.active.name,
@@ -486,6 +601,9 @@ class Tape:
                     played=rank_played(played, res["options"]),
                     ms=int((time.time() - t0) * 1000),
                 )
+                calc = (rec.get("showdex") or {}).get(str(request.get("rqid"))) if request else None
+                if isinstance(calc, dict) and calc.get("moves"):
+                    decision["showdex"] = calc
                 prettify(decision, names)
             except Exception as e:
                 logger.exception("decision analysis failed")
@@ -496,3 +614,5 @@ class Tape:
 
         rec.update(status="done", settings={"searchMs": self.search_ms, "worlds": self.worlds})
         self._save(rec)
+        with self.lock:
+            self.lives.pop(battle_id, None)

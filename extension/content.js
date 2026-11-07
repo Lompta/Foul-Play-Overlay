@@ -5,14 +5,13 @@
 // Not allowed: live rated battles until they end.
 
 (() => {
-  const DEFAULTS = { enabled: false, searchMs: 1500, worlds: 8, scanMs: 500, scanWorlds: 6 };
+  const DEFAULTS = { enabled: false, searchMs: 1500, worlds: 8 };
   let settings = { ...DEFAULTS };
   let perspective = null; // 'p1' | 'p2', for replays and spectating
   let lastKey = null;
   let inFlight = false;
   let pendingSnap = null;
   let lastResult = null;
-  let scan = null; // { running, cancel, rows, done, total }
   let snap = null;
   let firstRun = true;
 
@@ -44,7 +43,6 @@
       setTimeout(() => { if (waiting.delete(reqId)) resolve(null); }, 1000);
     });
   }
-  function seekTurn(turn) { window.postMessage({ fpo: 'seek', turn }, '*'); }
 
   function analyze(payload) {
     return new Promise((resolve) => {
@@ -126,38 +124,6 @@
     else pendingSnap = null;
   }
 
-  // ------------------------------------------------------------ replay scan
-
-  async function runScan() {
-    const s = await getSnapshot();
-    if (!s || !(s.kind === 'replay' || s.kind === 'ended')) return;
-    const turnLines = s.log.map((l, i) => (l.startsWith('|turn|') ? i : -1)).filter((i) => i >= 0);
-    const names = { p1: s.players[0] || 'p1', p2: s.players[1] || 'p2' };
-    scan = { running: true, cancel: false, rows: [], done: 0, total: turnLines.length * 2 };
-    renderScan();
-    for (const idx of turnLines) {
-      for (const side of ['p1', 'p2']) {
-        if (scan.cancel) break;
-        const res = await analyze({ log: s.log, side, upTo: idx + 1, searchMs: settings.scanMs, worlds: settings.scanWorlds });
-        scan.done++;
-        if (res && res.ok && res.played && !res.played.skipped && res.options && res.options.length) {
-          scan.rows.push({
-            turn: res.turn,
-            side,
-            player: names[side],
-            played: res.played,
-            best: res.options[0],
-            score: res.played.evalLoss != null ? res.played.evalLoss : res.played.surprise,
-          });
-        }
-        renderScan();
-      }
-      if (scan.cancel) break;
-    }
-    scan.running = false;
-    renderScan();
-  }
-
   // ------------------------------------------------------------ UI
 
   const root = document.createElement('div');
@@ -173,11 +139,8 @@
       <div id="fpo-settings" hidden>
         <label>Search per world <input id="fpo-ms" type="number" min="100" step="100"> ms</label>
         <label>Sampled worlds <input id="fpo-worlds" type="number" min="1" max="32"></label>
-        <label>Scan: <input id="fpo-scanms" type="number" min="100" step="100"> ms × <input id="fpo-scanworlds" type="number" min="1" max="32"> worlds</label>
       </div>
       <div id="fpo-body"></div>
-      <div id="fpo-scanbar" hidden><button id="fpo-scan">Scan replay for surprises</button></div>
-      <div id="fpo-scan-out"></div>
       <div id="fpo-foot"><button id="fpo-review" class="fpo-link">Review my games ↗</button></div>
     </div>`;
   document.documentElement.appendChild(root);
@@ -192,7 +155,6 @@
     const mine = snap && snap.kind === 'ended' && snap.side && /^battle-/.test(snap.id || '');
     $('fpo-review').textContent = mine ? 'Full review of this game ↗' : 'Review my games ↗';
     $('fpo-review').dataset.id = mine ? snap.id.replace(/^battle-/, '') : '';
-    $('fpo-scanbar').hidden = !(snap && (snap.kind === 'replay' || snap.kind === 'ended'));
     if (p && p.replayish && snap && snap.players) {
       const side = p.side;
       persp.innerHTML = ['p1', 'p2']
@@ -213,22 +175,26 @@
     if (played && played.skipped) return '';
     if (!played || played.rank == null) return played ? '<span class="fpo-tag bad">not considered</span>' : '';
     if (played.rank === 1) return '<span class="fpo-tag good">top choice</span>';
+    // By win estimate, like the review page: within 3 points counts as agreeing
     const loss = played.evalLoss;
-    if (loss != null && loss >= 0.1) return '<span class="fpo-tag bad">likely mistake</span>';
-    if (played.surprise >= 0.3) return '<span class="fpo-tag warn">surprising</span>';
-    return '<span class="fpo-tag ok">reasonable</span>';
+    if (loss == null) return '<span class="fpo-tag ok">reasonable</span>';
+    if (loss < 0.03) return '<span class="fpo-tag good">about as good</span>';
+    if (loss >= 0.1) return '<span class="fpo-tag bad">likely mistake</span>';
+    return '<span class="fpo-tag ok">slightly worse</span>';
   }
 
   function renderResult(res, p) {
     if (!res.ok) { renderStatus(res.error || 'Analysis failed.'); return; }
     const playedChoice = res.played && res.played.choice;
+    const top = res.options[0] && res.options[0].eval;
     const rows = res.options.slice(0, 6).map((o) => {
       const isPlayed = playedChoice && (o.choice === playedChoice || o.choice === playedChoice.replace(/-tera$/, ''));
-      return `<div class="fpo-opt ${isPlayed ? 'played' : ''}">
-        <div class="fpo-bar" style="width:${Math.max(2, o.share * 100)}%"></div>
+      const q = o.eval == null || top == null ? '' : top - o.eval >= 0.1 ? 'q-bad' : top - o.eval >= 0.03 ? 'q-meh' : '';
+      return `<div class="fpo-opt ${isPlayed ? 'played' : ''} ${q}">
+        <div class="fpo-bar" style="width:${o.eval == null ? 0 : Math.max(2, o.eval * 100)}%"></div>
         <span class="fpo-label">${esc(o.label)}</span>
-        <span class="fpo-num">${pct(o.share)}</span>
-        <span class="fpo-eval" title="Foul Play's average search score for this choice (higher is better)">${o.eval == null ? '' : o.eval.toFixed(2)}</span>
+        <span class="fpo-num" title="Foul Play's win estimate if you pick this">${pct(o.eval)}</span>
+        <span class="fpo-eval" title="Share of Foul Play's search spent on this option">${pct(o.share)}</span>
       </div>`;
     }).join('');
     let playedLine = '';
@@ -246,24 +212,6 @@
       ${note}`;
   }
 
-  function renderScan() {
-    const out = $('fpo-scan-out');
-    if (!scan) { out.innerHTML = ''; return; }
-    const top = [...scan.rows].filter((r) => r.played.rank !== 1).sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 15);
-    const progress = scan.running
-      ? `<div class="fpo-sub">Scanning ${scan.done}/${scan.total} <button id="fpo-scan-cancel">Stop</button></div>`
-      : `<div class="fpo-sub">Scan done · biggest disagreements first</div>`;
-    out.innerHTML = progress + top.map((r) => `
-      <div class="fpo-scanrow" data-turn="${r.turn}" data-side="${r.side}" title="Jump to this turn">
-        <span class="fpo-t">T${r.turn}</span>
-        <span class="fpo-who">${esc(r.player)}</span>
-        <span class="fpo-what">${esc(r.played.label)} → <i>${esc(r.best.label)}</i></span>
-        ${verdict(r.played)}
-      </div>`).join('');
-    const c = out.querySelector('#fpo-scan-cancel');
-    if (c) c.onclick = () => { scan.cancel = true; };
-  }
-
   // events
   $('fpo-toggle').onclick = () => {
     settings.enabled = !settings.enabled;
@@ -273,15 +221,12 @@
   $('fpo-gear').onclick = () => { $('fpo-settings').hidden = !$('fpo-settings').hidden; };
   root.addEventListener('click', (e) => {
     const sideBtn = e.target.closest('.fpo-side');
-    if (sideBtn) { perspective = sideBtn.dataset.side; lastKey = null; tick(); return; }
-    const row = e.target.closest('.fpo-scanrow');
-    if (row) { perspective = row.dataset.side; lastKey = null; seekTurn(Number(row.dataset.turn)); setTimeout(tick, 400); }
+    if (sideBtn) { perspective = sideBtn.dataset.side; lastKey = null; tick(); }
   });
   $('fpo-review').onclick = (e) => {
     try { chrome.runtime.sendMessage({ type: 'open-review', id: e.target.dataset.id || '' }); } catch (err) { /* extension reloaded */ }
   };
-  $('fpo-scan').onclick = () => { if (!scan || !scan.running) runScan(); };
-  for (const [id, key] of [['fpo-ms', 'searchMs'], ['fpo-worlds', 'worlds'], ['fpo-scanms', 'scanMs'], ['fpo-scanworlds', 'scanWorlds']]) {
+  for (const [id, key] of [['fpo-ms', 'searchMs'], ['fpo-worlds', 'worlds']]) {
     $(id).onchange = (e) => { const v = Number(e.target.value); if (v > 0) { settings[key] = v; save(); lastKey = null; } };
   }
 
@@ -318,8 +263,6 @@
     settings = { ...DEFAULTS, ...(v && v.fpo) };
     $('fpo-ms').value = settings.searchMs;
     $('fpo-worlds').value = settings.worlds;
-    $('fpo-scanms').value = settings.scanMs;
-    $('fpo-scanworlds').value = settings.scanWorlds;
     applyEnabled();
   });
 

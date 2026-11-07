@@ -78,14 +78,47 @@ def main():
         assert not res["ok"] and "progress" in res["error"], res
         print("in-progress battle refused: OK")
 
-        # 3. Finished battle: recorded, analyzed in the background
-        res = tape.record({"id": "battle-" + replay["id"], "log": log, "side": side, "players": [replay["players"][0], replay["players"][1]], "requests": requests, "lastUpdate": time.time() * 1000})
+        # 3. While the battle goes on, decisions you've made get searched ahead of
+        # time; the one still open doesn't
+        searches = []
+        real_search = analyzer.search
+
+        def counting_search(battle, *a, **k):
+            searches.append(battle.turn)
+            return real_search(battle, *a, **k)
+
+        analyzer.search = counting_search
+        turn_lines = [i for i, l in enumerate(log) if l.startswith("|turn|")]
+        mid = turn_lines[len(turn_lines) // 2]
+        for cut in turn_lines[: len(turn_lines) // 2 + 1]:
+            sofar = log[: cut + 1]
+            seen = [e for e in requests if e["logLen"] is None or e["logLen"] <= len(sofar)]
+            assert tape.live({"id": "battle-" + replay["id"], "log": sofar, "side": side, "requests": seen})["ok"]
+            while tape._next_live_job() is not None:
+                time.sleep(0.2)
+        mid_turn = int(log[mid].split("|")[2])
+        assert searches and max(searches) < mid_turn, (searches, mid_turn)
+        assert tape.load(replay["id"]) is None and not any(m["id"] == replay["id"] for m in tape.list()), "nothing visible mid-battle"
+        live_count = len(searches)
+        print(f"searched {live_count} decisions during the battle, none of turn {mid_turn} (still open): OK")
+
+        # 4. Finished battle: recorded, analyzed in the background. Pretend Showdex
+        # was open for the first move decision.
+        first_move = next(e["request"] for e in requests if e["request"].get("active"))
+        move_id = first_move["active"][0]["moves"][0]["id"]
+        showdex = {str(first_move["rqid"]): {"mon": "x", "vs": "y", "tera": False, "moves": [{"move": move_id, "damage": "40 - 48%", "ko": "3HKO"}]}}
+        res = tape.record({"id": "battle-" + replay["id"], "log": log, "side": side, "players": [replay["players"][0], replay["players"][1]], "requests": requests, "showdex": showdex, "lastUpdate": time.time() * 1000})
         assert res["ok"], res
         t0 = time.time()
         while tape.status()["pending"]:
             time.sleep(0.5)
         rec = tape.load(replay["id"])
         assert rec["status"] == "done", rec.get("error")
+        searched = [d for d in rec["decisions"] if d.get("options")]
+        assert len(searches) == len(searched), ("each decision searched exactly once", len(searches), len(searched))
+        assert replay["id"] not in tape.lives
+        print(f"after the battle: reused {live_count}, searched {len(searches) - live_count} more: OK")
+        analyzer.search = real_search
         ds = rec["decisions"]
         errors = [d for d in ds if d.get("error")]
         warnings = [d for d in ds if d.get("warning")]
@@ -96,6 +129,21 @@ def main():
             print(f"  T{d['turn']} {d['kind']:6} {d.get('user')} vs {d.get('opponent')}: win {d.get('value')} | FP {top} | played {p.get('label')} #{p.get('rank')}")
         print("  happened:", ds[1]["happened"][:4])
         print("meta:", Tape.meta(rec))
+        with_calc = [d for d in ds if d.get("showdex")]
+        assert len(with_calc) == 1 and with_calc[0]["showdex"]["moves"][0]["ko"] == "3HKO", with_calc
+        print("Showdex reading attached to its decision: OK")
+
+        # 5. Notes: saved apart from the record, survive re-analysis, cleared when emptied
+        assert tape.set_notes(replay["id"], "Should have stayed in on T3.")
+        assert not tape.set_notes("nope", "x") and not tape.set_notes("../evil", "x")
+        assert tape.reanalyze(replay["id"])
+        assert tape.notes(replay["id"]) == "Should have stayed in on T3."
+        assert next(m for m in tape.list() if m["id"] == replay["id"])["hasNotes"]
+        assert tape.set_notes(replay["id"], "  ") and tape.notes(replay["id"]) == ""
+        assert not next(m for m in tape.list() if m["id"] == replay["id"])["hasNotes"]
+        print("notes: OK")
+        while tape.status()["pending"]:  # let the re-analysis finish before the folder goes
+            time.sleep(0.5)
         for d in errors:
             print("ERROR", d["turn"], d["kind"], d["error"])
         sys.exit(1 if errors else 0)

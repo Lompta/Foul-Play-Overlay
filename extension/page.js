@@ -42,19 +42,12 @@
     };
   }
 
-  function seek(turn) {
-    const b = location.hostname.startsWith('replay.') ? window.battle : window.app?.curRoom?.battle;
-    if (b) b.seekTurn(turn);
-  }
-
   window.addEventListener('message', (e) => {
     if (e.source !== window || !e.data || typeof e.data.fpo !== 'string') return;
     if (e.data.fpo === 'get') {
       let snap = null;
       try { snap = snapshot(); } catch (err) { snap = { error: String(err) }; }
       window.postMessage({ fpo: 'snap', reqId: e.data.reqId, snap }, '*');
-    } else if (e.data.fpo === 'seek') {
-      try { seek(e.data.turn); } catch (err) { /* ignore */ }
     }
   });
 
@@ -106,6 +99,88 @@
     return true;
   }
 
+  // ------------------------------------------------------------ Showdex
+  //
+  // If the Showdex extension is open on a battle, it shows damage ranges and
+  // KO chances for your active Pokémon's moves. We copy what it shows, for each
+  // decision, so the review can label options with them ("Discharge (2HKO)").
+  // This only reads Showdex's table; nothing is shown during the battle. Its
+  // markup uses CSS-module class names like "PokeMoves-module-container--Um1rb",
+  // so we match on the stable prefix.
+
+  const toID = (s) => String(s || '').normalize('NFD').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  const q = (el, mod) => el.querySelector(`[class*="${mod}"]`);
+  const lastCalc = new Map(); // room id -> last calc sent, as JSON
+
+  function calcdexRoots(room) {
+    // Showdex renders either over the battle (inside its room) or in its own
+    // "view-calcdex-<battle id>" panel
+    const roots = [];
+    const panel = window.app.rooms['view-calcdex-' + toID(room.id)];
+    if (panel && panel.el) roots.push(panel.el);
+    if (room.el) roots.push(room.el);
+    return roots;
+  }
+
+  function nameLabel(playerCalc) {
+    const el = q(playerCalc, 'PokeInfo-module-nameLabel');
+    return el ? el.textContent.trim() : null;
+  }
+
+  function readShowdex(room, request, myName) {
+    const active = request.active && request.active[0];
+    if (!active || !Array.isArray(active.moves)) return null;
+    const legal = new Set(active.moves.map((m) => toID(m.id || m.move)));
+    for (const root of calcdexRoots(room)) {
+      const calcs = [...root.querySelectorAll('[class*="PlayerCalc-module-container"]')];
+      const mine = calcs.find((pc) => {
+        const who = q(pc, 'PlayerInfo-module-usernameButtonLabel');
+        return who && toID(who.textContent) === toID(myName);
+      });
+      if (!mine) continue;
+      const table = q(mine, 'PokeMoves-module-container');
+      if (!table || /PokeMoves-module-editor-/.test(table.className)) return null;
+      const kids = [...table.children];
+      const moves = [];
+      for (let i = 0; i < kids.length; i++) {
+        const dd = q(kids[i], 'Dropdown-module-container');
+        if (!dd) continue;
+        const nm = q(dd, 'Dropdown-module-singleValue');
+        const dmg = kids[i + 1], ko = kids[i + 2];
+        if (!nm || !dmg || !ko || q(ko, 'Dropdown-module-container')) continue;
+        const label = q(dmg, 'PokeMoves-module-damageButtonLabel');
+        moves.push({ move: nm.textContent.trim(), damage: label ? label.textContent.trim() : '', ko: ko.textContent.trim() });
+        i += 2;
+      }
+      // Only trust it when it's showing your active Pokémon's actual moves
+      if (!moves.length || !moves.every((m) => legal.has(toID(m.move)))) return null;
+      const teraBtn = [...table.querySelectorAll('[class*="PokeMoves-module-ultButton"]')]
+        .find((b) => q(b, 'PokeMoves-module-teraButtonLabel'));
+      const opp = calcs.find((pc) => pc !== mine);
+      return {
+        mon: nameLabel(mine),
+        vs: opp ? nameLabel(opp) : null,
+        tera: !!(active.canTerastallize && teraBtn && /ToggleButton-module-active/.test(teraBtn.className)),
+        moves,
+      };
+    }
+    return null;
+  }
+
+  function recordShowdex(room) {
+    const r = room.request;
+    if (!r || r.wait || r.teamPreview || r.forceSwitch || !r.side || room.battleEnded || room.battle.ended) return;
+    const names = players(room.battle);
+    const myName = names[r.side.id === 'p1' ? 0 : 1] || r.side.name;
+    const calc = readShowdex(room, r, myName);
+    if (!calc) return;
+    // The last reading before the next request is the one you saw while deciding
+    const key = JSON.stringify([r.rqid, calc]);
+    if (lastCalc.get(room.id) === key) return;
+    lastCalc.set(room.id, key);
+    post({ type: 'calc', room: room.id, side: r.side.id, rqid: r.rqid, calc });
+  }
+
   function pollRooms() {
     hookRequests();
     const rooms = (window.app && window.app.rooms) || {};
@@ -114,6 +189,7 @@
       if (!room || !room.battle || !id.startsWith('battle-')) continue;
       // Backup for anything the hook missed (e.g. requests received before it was installed)
       if (room.side && room.request) { try { recordRequest(room, room.request); } catch (e) { /* ignore */ } }
+      if (room.side) { try { recordShowdex(room); } catch (e) { /* never break the client */ } }
       const side = room.side || sideOf.get(id);
       if ((room.battleEnded || room.battle.ended) && side && !finished.has(id)) {
         finished.add(id);

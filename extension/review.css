@@ -108,7 +108,9 @@ button { font: inherit; cursor: pointer; }
 .opt span { position: relative; }
 .opt .lab { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .opt .num { font-variant-numeric: tabular-nums; font-weight: 600; }
-.opt .ev { width: 36px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.opt .sh { width: 84px; text-align: right; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; align-self: center; }
+.opt.q-meh .bar { background: var(--warn-bg); }
+.opt.q-bad .bar { background: var(--bad-bg); }
 .pos { grid-column: 1 / -1; }
 .fieldline { margin-bottom: 8px; }
 .sides { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
@@ -152,6 +154,13 @@ button { font: inherit; cursor: pointer; }
 .tag.warn { background: var(--warn-bg); color: var(--warn); }
 .tag.bad { background: var(--bad-bg); color: var(--bad); }
 .tag.none { background: var(--surface-2); color: var(--muted); }
+
+.notes-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.notes-head span { font-size: 12px; }
+.notes textarea { display: block; width: 100%; min-height: 72px; resize: vertical; font: inherit; color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.notes textarea:focus { outline: none; border-color: var(--accent); }
+.item .noted { color: var(--accent); }
+.opt .ko { color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
 
 .progress { height: 4px; background: var(--surface-2); border-radius: 2px; overflow: hidden; margin-top: 6px; }
 .progress div { height: 100%; background: var(--accent); }

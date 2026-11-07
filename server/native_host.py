@@ -24,7 +24,7 @@ import urllib.request
 from ctypes import wintypes
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PORT = 8770
+PORT = int(os.environ.get("FPO_PORT", "8770"))  # override for tests
 HEALTH = f"http://127.0.0.1:{PORT}/health"
 
 
@@ -128,7 +128,14 @@ def main():
 
     reader = threading.Thread(target=wait_for_stdin_close, daemon=True)
     reader.start()
-    reader.join()
+    while reader.is_alive():
+        reader.join(1)
+        if proc is not None and proc.poll() is not None:
+            # Our server died (crash, or killed by hand): exit too, so the
+            # extension sees the disconnect and starts a fresh one next time.
+            # Hard exit: the stdin reader thread is mid-read and would trip up
+            # a normal interpreter shutdown.
+            os._exit(0)
     # Returning closes our job handle, which kills the server and its workers
 
 

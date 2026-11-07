@@ -7,20 +7,25 @@
 turn by turn. Gen 9 Random Battles only.
 
 - **Replays** (rated or not), from either player's perspective: the ranking,
-  where the move actually played ranked, and a tag for top choice, reasonable,
-  surprising or likely mistake.
-- **Scan replay**: analyzes every turn for both players and lists the biggest
-  disagreements with Foul Play. Click one to jump to that turn.
+  where the move actually played ranked, and a tag for top choice, about as
+  good, slightly worse or likely mistake.
 - **Live unrated battles**, e.g. against Foul Play itself (see the sparring bot below).
 - **Off during live rated battles.** It turns back on when the battle ends, and
   works on the replay. This is enforced in both the extension and the server.
 - **Review the tape** of your own games (ladder or not). While you play, the
   extension quietly records each request Showdown sends you, which holds your exact
-  team, moves, HP and legal options. Nothing is analyzed or shown during the
-  battle. When it ends, Foul Play analyzes every decision you made (each turn's
-  move, plus every replacement after a faint or pivot) with what you actually
-  knew, and estimates how the game was going before each one. Open it from the
-  extension's toolbar icon, or "Review my games" in the panel.
+  team, moves, HP and legal options. Foul Play analyzes every decision you made
+  (each turn's move, plus every replacement after a faint or pivot) with what you
+  actually knew, and estimates how the game was going before each one. To have
+  that ready when the game ends, it works through each decision once it's behind
+  you (never one you're still making); the results stay in the server's memory,
+  unseen, until the battle is over, and then show up within seconds. Open it from the
+  extension's toolbar icon, or "Review my games" in the panel. Each game has a
+  notes box, saved as you type.
+- **Showdex KO figures**: if [Showdex](https://github.com/doshidak/showdex) is open
+  while you play, the recording also copies what it showed for your active
+  Pokémon's moves, so the review labels options like "Discharge (2HKO)". It only
+  reads Showdex's table; nothing is computed or shown during the battle.
 
 Foul Play peaked around 2340 Elo on the Random Battle ladder: strong, but below
 the very top. Treat its rankings as a strong second opinion, not gospel.
@@ -38,6 +43,14 @@ uv pip install --python .venv\Scripts\python.exe requests==2.33.0 websockets==14
 uv pip install --python .venv\Scripts\python.exe --no-cache "poke-engine==0.0.48" -C "build-args=--features poke-engine/terastallization --no-default-features"
 ```
 
+For now the installed poke-engine is patched with a fix for locking moves like
+Outrage ([poke-engine#41](https://github.com/pmariglia/poke-engine/pull/41)).
+Reinstalling from PyPI drops it. To put it back before that's released:
+```powershell
+uv pip install --python .venv\Scripts\python.exe --reinstall "poke-engine @ git+https://github.com/Lompta/poke-engine@fix/lockedmove-2-or-3-turns#subdirectory=poke-engine-py" -C "build-args=--features poke-engine/terastallization --no-default-features"
+```
+(Stop the server first; Windows won't replace the engine while it's loaded.)
+
 Load the extension: `chrome://extensions` → Developer mode → **Load unpacked** →
 this folder's `extension` subfolder. Its ID is always `olkcabjpgbmblenfkohjcophdlfpehca`
 (fixed by the `key` in its manifest; the private half is `extension-key.pem`, not needed for use).
@@ -49,7 +62,8 @@ itself (your Windows account only; undo with `-Uninstall`).
 
 1. On Showdown or a replay page, click the round **FP** button at the bottom right.
    The server starts by itself (about a second). It stops about 15 s after FP is
-   off in every tab or the last Showdown tab closes. Idle it uses no CPU and
+   off in every tab or the last Showdown tab closes, but stays up while you're in a
+   battle so your review can be prepared as you play. Idle it uses no CPU and
    about 500 MB of memory; it and its workers run in a Windows job object, so a
    crash can't leave them behind.
    - To use different search settings, start it by hand instead and leave the window open:
@@ -57,19 +71,21 @@ itself (your Windows account only; undo with `-Uninstall`).
      The default is 1500 ms × 8 sampled worlds, about 3-4 s per position.
 3. In replays, choose whose perspective to analyze with the two name buttons.
    Step through turns as usual; the panel follows.
-4. **Scan replay for surprises** runs a quicker search on every turn (settings ⚙).
-5. **Review my games** (toolbar icon or panel link) lists your recorded battles. Each one
+4. **Review my games** (toolbar icon or panel link) lists your recorded battles. Each one
    shows Foul Play's win estimate over the game (hover for details, click to jump),
    how often you agreed with it, likely mistakes, and every decision with its full
-   ranking and what happened next. A finished battle takes about 2-4 minutes to
-   analyze (1500 ms × 8 worlds per decision; change with `--tape-search-ms` and
-   `--tape-worlds`). The server stays up until the queue is done.
+   ranking and what happened next. Most of the analysis happens during the game
+   (1500 ms × 8 worlds per decision, a few seconds each; change with
+   `--tape-search-ms` and `--tape-worlds`); a game recorded with the server off
+   takes about 2-4 minutes after it ends. The server stays up until the queue is done. Notes are saved to
+   `data/battles/notes/<battle id>.txt`, separate from the analysis, so Re-analyze
+   keeps them.
 
-The bars are the share of Foul Play's search spent on each option, which is
-roughly how strongly it prefers it. The small number is its average search
-score (higher is better). "Likely mistake" means the played move scored at
-least 0.1 below the top choice. "Surprising" means Foul Play gave it at least
-30 percentage points less than its top choice.
+Each option shows Foul Play's win estimate if you pick it (bar and number),
+plus, small, how much of its search went to it. Verdicts go by win estimate:
+within 3 points of its top choice is "about as good" and counts as agreeing
+(repeat searches differ by about that much); 10 or more below is a "likely
+mistake"; in between is "slightly worse".
 
 ## Sparring against Foul Play
 

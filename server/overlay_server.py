@@ -225,6 +225,8 @@ def make_handler(analyzer: Analyzer, tape):
                         self._send(404, {"ok": False, "error": "no such battle"})
                     else:
                         rec.pop("requests", None)
+                        rec.pop("showdex", None)  # already attached to each decision
+                        rec["notes"] = tape.notes(rec["id"])
                         self._send(200, {"ok": True, "battle": rec})
             else:
                 self._send(404, {"ok": False})
@@ -237,9 +239,17 @@ def make_handler(analyzer: Analyzer, tape):
                     self._send(200, analyzer.analyze(self._body()))
                 elif self.path == "/record":
                     self._send(200, tape.record(self._body()))
+                elif self.path == "/record/live":
+                    self._send(200, tape.live(self._body()))
                 elif self.path.startswith("/battles/") and self.path.endswith("/reanalyze"):
                     battle_id = self.path[len("/battles/") : -len("/reanalyze")]
                     if tape.reanalyze(battle_id):
+                        self._send(200, {"ok": True})
+                    else:
+                        self._send(404, {"ok": False, "error": "no such battle"})
+                elif self.path.startswith("/battles/") and self.path.endswith("/notes"):
+                    battle_id = self.path[len("/battles/") : -len("/notes")]
+                    if tape.set_notes(battle_id, self._body().get("notes")):
                         self._send(200, {"ok": True})
                     else:
                         self._send(404, {"ok": False, "error": "no such battle"})
