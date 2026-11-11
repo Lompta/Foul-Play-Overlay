@@ -62,6 +62,9 @@ button { font: inherit; cursor: pointer; }
 .res.win { background: var(--good-bg); color: var(--good); }
 .res.loss { background: var(--bad-bg); color: var(--bad); }
 .res.tie, .res.unknown { background: var(--surface-2); color: var(--ink-2); }
+.rank { font-size: 12px; font-weight: 600; padding: 0 6px; border-radius: 4px; white-space: nowrap; background: var(--surface-2); color: var(--ink-2); }
+.rank.up { background: var(--good-bg); color: var(--good); }
+.rank.down { background: var(--bad-bg); color: var(--bad); }
 
 .head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 16px; margin-bottom: 14px; }
 .head h2 { margin: 0; font-size: 20px; }

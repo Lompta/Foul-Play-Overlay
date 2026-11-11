@@ -22,6 +22,9 @@ turn by turn. Gen 9 Random Battles only.
   unseen, until the battle is over, and then show up within seconds. Open it from the
   extension's toolbar icon, or "Review my games" in the panel. Each game has a
   notes box, saved as you type.
+- **Ladder rank**: for a rated game you start or end in the top 500, the review
+  shows your rank before and after (e.g. "#312 → #287 ▲25"). The server reads
+  Showdown's public top-500 list once, right after the game ends.
 - **Showdex KO figures**: if [Showdex](https://github.com/doshidak/showdex) is open
   while you play, the recording also copies what it showed for your active
   Pokémon's moves, so the review labels options like "Discharge (2HKO)". It only

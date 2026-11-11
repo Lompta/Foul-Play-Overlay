@@ -33,6 +33,7 @@ from html import unescape
 from fp.battle.helpers import normalize_name
 
 from battle_builder import clean_log
+from ladder import ladder_shift
 from choices import display_names, next_action, prettify, rank_played
 from snapshot import snapshot, teamsizes
 
@@ -284,6 +285,7 @@ class Tape:
             "result": rec.get("result"),
             "rated": rec.get("rated"),
             "rating": rec.get("rating"),
+            "ladder": rec.get("ladder"),
             "endedAt": rec.get("endedAt"),
             "turns": rec.get("turns"),
             "status": rec.get("status"),
@@ -372,12 +374,18 @@ class Tape:
                 result = "win" if line[5:] == me else "loss"
             elif line == "|tie" or line.startswith("|tie|"):
                 result = "tie"
-        rating = None
+        rating = opp_rating = None
         for line in log:
             # |raw|Name's rating: 1500 &rarr; <strong>1520</strong><br />(+20 for winning)
             m = re.match(r"\|raw\|(.+?)'s rating: (\d+) &rarr; <strong>(\d+)</strong>", line)
             if m and unescape(m.group(1)) == me:
                 rating = {"before": int(m.group(2)), "after": int(m.group(3))}
+            elif m and unescape(m.group(1)) == opp:
+                opp_rating = {"before": int(m.group(2)), "after": int(m.group(3))}
+        # Ladder rank change, read once just after the game (the ladder moves on)
+        ladder = existing.get("ladder") if existing else None
+        if ladder is None and rating and ended and time.time() - last < 10 * 60:
+            ladder = ladder_shift(me, rating, opp, opp_rating)
         turns = max((int(l.split("|")[2]) for l in log if l.startswith("|turn|")), default=0)
 
         rec = {
@@ -389,6 +397,7 @@ class Tape:
             "rated": any(line.startswith("|rated") for line in log),
             "result": result,
             "rating": rating,
+            "ladder": ladder,
             "turns": turns,
             "abandoned": abandoned,
             "endedAt": int(time.time() * 1000) if ended else int(last * 1000),

@@ -61,6 +61,18 @@
   const tag = (v) => `<span class="tag ${v.cls}">${esc(v.text)}</span>`;
   const isMistake = (d) => d.played && d.played.rank != null && (d.played.evalLoss || 0) >= 0.1;
 
+  // Ladder rank change, for games that start or end in the top 500
+  function rankShift(b, long) {
+    const l = b.ladder;
+    if (!l || (l.before == null && l.after == null)) return '';
+    const r = (n) => (n == null ? '500+' : '#' + n);
+    const up = l.before == null ? true : l.after == null ? false : l.after < l.before;
+    const delta = l.before != null && l.after != null && l.before !== l.after ? ` ${up ? '▲' : '▼'}${Math.abs(l.before - l.after)}` : '';
+    const cls = l.before === l.after ? '' : up ? 'up' : 'down';
+    const title = `Ladder rank: ${r(l.before)} before, ${r(l.after)} after (read just after the game)`;
+    return `<span class="rank ${cls}" title="${esc(title)}">${long ? 'Ladder ' : ''}${r(l.before)} → ${r(l.after)}${delta}</span>`;
+  }
+
   // ------------------------------------------------------------ list
 
   function when(ms) {
@@ -89,7 +101,7 @@
       const rating = b.rating ? `${b.rating.after} (${b.rating.after >= b.rating.before ? '+' : ''}${b.rating.after - b.rating.before})` : (b.rated ? 'rated' : 'unrated');
       return `<button class="item ${b.id === sel ? 'on' : ''}" data-id="${esc(b.id)}">
         <div class="row1"><span class="vs">vs ${esc(b.opponent)}</span><span class="res ${res}">${resText}</span></div>
-        <div class="row2"><span>${when(b.endedAt)}</span><span>${esc(rating)}</span><span>${b.turns || 0} turns</span>${noted}</div>
+        <div class="row2"><span>${when(b.endedAt)}</span><span>${esc(rating)}</span>${rankShift(b)}<span>${b.turns || 0} turns</span>${noted}</div>
         <div class="row2"><span>${esc(statusText(b))}</span></div>
       </button>`;
     }).join('');
@@ -116,6 +128,7 @@
       <div class="head">
         <h2>${esc(b.me)} vs ${esc(b.opponent)}</h2>
         <span class="muted">${esc(resText)}${esc(rating)} · ${b.turns} turns · ${when(b.endedAt)}</span>
+        ${rankShift(b, true)}
         <div class="actions"><button class="btn" id="reanalyze" title="Run the analysis again (e.g. after changing search settings)">Re-analyze</button></div>
       </div>
       ${progress}
