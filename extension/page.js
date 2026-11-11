@@ -99,6 +99,56 @@
     return true;
   }
 
+  // ------------------------------------------------------------ forfeits
+  //
+  // Forfeiting from the close-tab popup removes the room right away, so the
+  // battle's ending (Showdown's "X forfeited." and |win| lines) never reaches
+  // the client and the poll below never sees it end. So we watch for /forfeit
+  // being sent, keep the log as it was then, and if the room then disappears
+  // before its ending arrives, finish the recording with the lines Showdown
+  // would have sent.
+
+  const forfeited = new Map(); // room id -> { room, side, players, log }
+
+  function noteForfeit(roomId) {
+    const room = window.app.rooms[roomId];
+    if (!room || !room.battle || room.battleEnded || room.battle.ended) return;
+    const side = room.side || sideOf.get(roomId);
+    if (!side || !seenRqids.has(roomId)) return; // not a battle of yours we recorded
+    forfeited.set(roomId, { side, players: players(room.battle), log: room.battle.stepQueue.slice() });
+  }
+
+  function hookForfeit() {
+    const app = window.app;
+    if (!app || typeof app.send !== 'function') return;
+    if (app.send.__fpoHooked) return;
+    const orig = app.send;
+    const hooked = function (data, room) {
+      try {
+        let text = String(data || ''), id = typeof room === 'string' ? room : '';
+        const m = /^(battle-[^|]+)\|(.*)$/s.exec(text);
+        if (m) { id = m[1]; text = m[2]; }
+        if (id.startsWith('battle-') && /^\/(forfeit|ff)\b/i.test(text.trim())) noteForfeit(id);
+      } catch (e) { /* never break the client */ }
+      return orig.apply(this, arguments);
+    };
+    hooked.__fpoHooked = true;
+    app.send = hooked;
+  }
+
+  function finishForfeits(rooms) {
+    for (const [id, f] of forfeited) {
+      if (finished.has(id)) { forfeited.delete(id); continue; }
+      if (rooms[id]) continue; // still open: its real ending will arrive
+      forfeited.delete(id);
+      finished.add(id);
+      const me = f.players[f.side === 'p1' ? 0 : 1];
+      const opp = f.players[f.side === 'p1' ? 1 : 0];
+      const log = f.log.concat(['|', '|-message|' + me + ' forfeited.', '|', '|win|' + opp]);
+      post({ type: 'final', room: id, side: f.side, players: f.players, log });
+    }
+  }
+
   // ------------------------------------------------------------ Showdex
   //
   // If the Showdex extension is open on a battle, it shows damage ranges and
@@ -183,7 +233,9 @@
 
   function pollRooms() {
     hookRequests();
+    hookForfeit();
     const rooms = (window.app && window.app.rooms) || {};
+    finishForfeits(rooms);
     for (const id in rooms) {
       const room = rooms[id];
       if (!room || !room.battle || !id.startsWith('battle-')) continue;
@@ -211,5 +263,6 @@
   const namesTimer = setInterval(() => { if (shareNames() || ++namesTries > 30) clearInterval(namesTimer); }, 2000);
 
   hookRequests();
+  hookForfeit();
   setInterval(pollRooms, 1000);
 })();
