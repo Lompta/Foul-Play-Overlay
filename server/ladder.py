@@ -21,6 +21,11 @@ LADDER_URL = "https://pokemonshowdown.com/ladder/gen9randombattle.json"
 TOP = 500
 
 
+def shown(elo: float) -> int:
+    """The ladder keeps Elo as a float; battle messages show it truncated (2114.54 -> 2114)."""
+    return int(elo)
+
+
 def fetch_toplist(timeout: float = 5) -> list[dict]:
     req = urllib.request.Request(LADDER_URL, headers={"User-Agent": "foul-play-overlay"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -34,12 +39,12 @@ def ranks(toplist: list[dict], me: str, rating: dict, opponent: str | None = Non
     """
     me_id, opp_id = normalize_name(me), normalize_name(opponent or "")
     toplist = sorted(toplist, key=lambda e: -e["elo"])
-    cutoff = round(toplist[-1]["elo"]) if len(toplist) >= TOP else 0
+    cutoff = shown(toplist[-1]["elo"]) if len(toplist) >= TOP else 0
 
     after = None
     for i, e in enumerate(toplist):
         if e["userid"] == me_id:
-            if round(e["elo"]) != rating["after"]:
+            if shown(e["elo"]) != rating["after"]:
                 return None  # still your old rating: not updated yet
             after = i + 1
             break
@@ -47,7 +52,7 @@ def ranks(toplist: list[dict], me: str, rating: dict, opponent: str | None = Non
         if rating["after"] > cutoff:
             return None  # should be on it by now
 
-    others = [round(e["elo"]) for e in toplist if e["userid"] not in (me_id, opp_id)]
+    others = [shown(e["elo"]) for e in toplist if e["userid"] not in (me_id, opp_id)]
     if opp_rating:
         others.append(opp_rating["before"])
     before = None
