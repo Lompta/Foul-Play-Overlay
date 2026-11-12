@@ -91,6 +91,61 @@ def selected_move(battle: Battle, chunk: list[str]) -> LastUsedMove:
     return LastUsedMove("", "tackle", battle.turn)
 
 
+_vendor_illusion_end = protocol.illusion_end
+
+
+def illusion_end(battle: Battle, split_msg: list[str]):
+    """
+    Foul Play only unmasks the *opponent's* Zoroark on |replace|: the live bot gets
+    a fresh request every turn that fixes up its own side. We replay our side from
+    the log, so without this, everything the disguised Zoroark did lands on the
+    Pokemon it was posing as (a fifth move, which crashes the engine, and its damage).
+    """
+    if protocol.is_opponent(battle, split_msg):
+        return _vendor_illusion_end(battle, split_msg)
+    unmask(battle.user, Pokemon.from_switch_string(split_msg[3]).name)
+    if battle.user.active is not None:
+        battle.user.active.zoroark_disguised_as = None
+
+
+def unmask(side: Battler, real_name: str):
+    """Make `real_name` (in reserve) the active Pokemon in place of the one it was posing as."""
+    disguised = side.active
+    real = next((p for p in side.reserve if p.name == real_name), None)
+    if disguised is None or real is None or disguised.name == real_name:
+        return
+    # What happened since the switch happened to Zoroark, not the mon it posed as
+    hp_fraction = disguised.hp / disguised.max_hp if disguised.max_hp else 1
+    real.hp = hp_fraction * real.max_hp
+    real.boosts, real.status = disguised.boosts, disguised.status
+    for mv in disguised.moves_used_since_switch_in:
+        disguised.remove_move(mv)
+        if real.get_move(mv) is None:
+            real.add_move(mv)
+    disguised.hp = disguised.hp_at_switch_in
+    disguised.status = disguised.status_at_switch_in
+    side.reserve.remove(real)
+    side.reserve.append(disguised)
+    side.active = real
+
+
+def unmask_from_request(battle: Battle, request: dict):
+    """
+    Our Zoroark switches in under another name, and the log won't say otherwise
+    until |replace|. The request does: if it has an Illusion user active where the
+    log shows someone else, it's in disguise.
+    """
+    for p in request.get("side", {}).get("pokemon", []):
+        if p.get("active"):
+            if normalize_name(p.get("baseAbility") or p.get("ability") or "") == "illusion":
+                unmask(battle.user, normalize_name(p.get("details", "").split(",")[0]))
+            return
+
+
+# process_battle_updates looks its handlers up by name on every call
+protocol.illusion_end = illusion_end
+
+
 def process_by_turn(battle: Battle, lines: list[str]):
     # Foul Play processes one turn's worth of messages at a time
     chunk = []
@@ -259,6 +314,7 @@ def build_battle(log: list[str], side: str, request: dict | None, mode, full_log
         battle = new_battle(mode, side)
         init_user_from_request(battle, request)
         process_by_turn(battle, lines)
+        unmask_from_request(battle, request)
         finish_with_request(battle, request)
         return Built(battle, synthetic=False)
 
