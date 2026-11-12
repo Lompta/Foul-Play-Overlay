@@ -385,7 +385,8 @@ class Tape:
         # Ladder rank change, read once just after the game (the ladder moves on)
         ladder = existing.get("ladder") if existing else None
         if ladder is None and rating and ended and time.time() - last < 10 * 60:
-            ladder = ladder_shift(me, rating, opp, opp_rating)
+            stamps = [int(l[4:]) for l in log if l.startswith("|t:|") and l[4:].isdigit()]
+            ladder = ladder_shift(me, rating, opp, opp_rating, started=stamps[0] if stamps else 0)
         turns = max((int(l.split("|")[2]) for l in log if l.startswith("|turn|")), default=0)
 
         rec = {
