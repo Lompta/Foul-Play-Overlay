@@ -255,7 +255,9 @@ def make_handler(analyzer: Analyzer, tape):
                         self._send(404, {"ok": False, "error": "no such battle"})
                 else:
                     self._send(404, {"ok": False})
-            except Exception as e:  # report it to the extension instead of dying
+            except BaseException as e:  # report it to the extension instead of dying (engine panics too)
+                if isinstance(e, (KeyboardInterrupt, SystemExit)):
+                    raise
                 logger.exception("request failed")
                 self._send(200, {"ok": False, "error": f"{type(e).__name__}: {e}"})
 

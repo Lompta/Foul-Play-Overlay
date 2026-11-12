@@ -39,6 +39,17 @@ from snapshot import snapshot, teamsizes
 
 logger = logging.getLogger("fpo")
 
+
+def _fatal(e: BaseException) -> bool:
+    """True for the exceptions that should still stop the server.
+
+    The Rust engine's panics arrive as pyo3's PanicException, which derives from
+    BaseException rather than Exception, so a plain `except Exception` lets them
+    through and kills the worker thread (the tape then sits on one battle forever).
+    Handlers catch BaseException and re-raise only these.
+    """
+    return isinstance(e, (KeyboardInterrupt, SystemExit))
+
 FORMAT_TIER = "[Gen 9] Random Battle"
 ABANDONED_AFTER_S = 30 * 60
 LIVE_FORGET_AFTER_S = 3 * 60 * 60  # in-progress searches nobody came back for
@@ -466,7 +477,9 @@ class Tape:
                     battle = build_battle(position, side, request, self.analyzer.mode).battle
                     ok = battle.user.active is not None and battle.opponent.active is not None
                     entry["cache"][key] = self.analyzer.search(battle, self.search_ms, self.worlds) if ok else None
-                except Exception:
+                except BaseException as e:
+                    if _fatal(e):
+                        raise
                     logger.exception("live search failed; it will be done after the battle")
                     entry["cache"][key] = None
 
@@ -504,14 +517,18 @@ class Tape:
                     self.add_states(self.current)
                 else:
                     self.analyze(self.current)
-            except Exception as e:
+            except BaseException as e:
+                if _fatal(e):
+                    raise
                 logger.exception("tape analysis failed")
                 try:
                     rec = self.load(self.current)
                     if rec:
                         rec.update(status="error", error=f"{type(e).__name__}: {e}")
                         self._save(rec)
-                except Exception:
+                except BaseException as e:
+                    if _fatal(e):
+                        raise
                     logger.exception("couldn't record the failure either")
             finally:
                 with self.lock:
@@ -550,7 +567,9 @@ class Tape:
                 continue
             try:
                 _, d["state"] = self._position(rec, point, request, names)
-            except Exception:
+            except BaseException as e:
+                if _fatal(e):
+                    raise
                 logger.exception("couldn't rebuild a position")
                 d["state"] = None
         self._save(rec)
@@ -615,7 +634,9 @@ class Tape:
                 if isinstance(calc, dict) and calc.get("moves"):
                     decision["showdex"] = calc
                 prettify(decision, names)
-            except Exception as e:
+            except BaseException as e:
+                if _fatal(e):
+                    raise
                 logger.exception("decision analysis failed")
                 decision.update(error=f"{type(e).__name__}: {e}", played=played)
             rec["decisions"].append(decision)
